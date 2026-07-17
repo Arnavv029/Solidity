@@ -12,11 +12,13 @@ export const ClientView = ({ onViewDetails }) => {
   const [amount, setAmount] = useState("");
   const [deadline, setDeadline] = useState("");
   const [requirements, setRequirements] = useState("");
+  const [freelancer, setFreelancer] = useState("");
+  const [mediator, setMediator] = useState("");
 
   // Modal review state
   const [reviewJobId, setReviewJobId] = useState(null);
   const [feedback, setFeedback] = useState("");
-  
+
   // Dispute trigger states
   const [disputeJobId, setDisputeJobId] = useState(null);
   const [disputeReason, setDisputeReason] = useState("");
@@ -51,28 +53,37 @@ export const ClientView = ({ onViewDetails }) => {
     }
   };
 
-  const handleCreate = (e) => {
+  const handleCreate = async (e) => {
     e.preventDefault();
+
     if (session.role !== "client") {
-      addToast("Error: Access denied. Please select the Client role to deposit.", "error");
+      addToast("Please select Client role.", "error");
       return;
     }
 
-    const success = createJob(
+    if (!freelancer || !mediator) {
+      addToast("Please enter Freelancer and Mediator wallet addresses.", "error");
+      return;
+    }
+
+    const success = await createJob(
       title,
       description,
       amount,
       deadline,
-      requirements
+      requirements,
+      freelancer,
+      mediator
     );
 
     if (success) {
-      // Clear form inputs
       setTitle("");
       setDescription("");
       setAmount("");
       setDeadline("");
       setRequirements("");
+      setFreelancer("");
+      setMediator("");
     }
   };
 
@@ -109,7 +120,7 @@ export const ClientView = ({ onViewDetails }) => {
 
   return (
     <div className="flex flex-col gap-10 py-10 px-6 max-w-7xl mx-auto">
-      
+
       {/* Page Header / Access warning */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/[0.06] pb-6">
         <div className="flex flex-col gap-1">
@@ -140,7 +151,7 @@ export const ClientView = ({ onViewDetails }) => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
+
         {/* Left Column: Create New Escrow Form (1 Part) */}
         <div className="lg:col-span-1 flex flex-col gap-6">
           <div className="glass-panel p-6 border border-white/[0.06] bg-white/[0.01] flex flex-col gap-5">
@@ -148,13 +159,43 @@ export const ClientView = ({ onViewDetails }) => {
               <FiPlusCircle className="text-purple-400" />
               Create Escrow Job
             </h3>
-            
+
             <form onSubmit={handleCreate} className="flex flex-col gap-4 text-sm text-left">
-                <div className="flex flex-col gap-1.5 bg-white/[0.02] border border-white/[0.04] rounded-2xl p-4 text-slate-300 text-xs">
+              <div className="flex flex-col gap-1.5 bg-white/[0.02] border border-white/[0.04] rounded-2xl p-4 text-slate-300 text-xs">
                 <span className="font-bold uppercase text-slate-400 tracking-wider text-2xs">Freelancer / Mediator Assignment</span>
                 <p className="leading-relaxed text-slate-400 text-sm">
                   Jobs are simulated with a generic Freelancer and Mediator role. This removes wallet address dependency while preserving the escrow workflow.
                 </p>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-slate-400 uppercase">
+                  Freelancer Wallet Address
+                </label>
+
+                <input
+                  type="text"
+                  required
+                  value={freelancer}
+                  onChange={(e) => setFreelancer(e.target.value)}
+                  className="glass-input"
+                  placeholder="0xFreelancerWallet"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-slate-400 uppercase">
+                  Mediator Wallet Address
+                </label>
+
+                <input
+                  type="text"
+                  required
+                  value={mediator}
+                  onChange={(e) => setMediator(e.target.value)}
+                  className="glass-input"
+                  placeholder="0xMediatorWallet"
+                />
               </div>
 
               <div className="flex flex-col gap-1.5">
@@ -220,11 +261,10 @@ export const ClientView = ({ onViewDetails }) => {
               <button
                 type="submit"
                 disabled={session.role !== "client"}
-                className={`w-full py-3.5 rounded-xl font-extrabold text-sm text-white flex items-center justify-center gap-2 border shadow-lg transition-all duration-300 mt-2 ${
-                  session.role === "client"
-                    ? "bg-gradient-to-r from-purple-600 to-indigo-600 border-purple-500/20 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
-                    : "bg-slate-800 border-slate-700/50 text-slate-500 cursor-not-allowed opacity-50"
-                }`}
+                className={`w-full py-3.5 rounded-xl font-extrabold text-sm text-white flex items-center justify-center gap-2 border shadow-lg transition-all duration-300 mt-2 ${session.role === "client"
+                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 border-purple-500/20 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+                  : "bg-slate-800 border-slate-700/50 text-slate-500 cursor-not-allowed opacity-50"
+                  }`}
               >
                 <FiShield />
                 Lock Funds & Create Escrow

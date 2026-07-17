@@ -2,7 +2,7 @@
   "name": "temp-vite",
   "private": true,
   "version": "0.0.0",
-  "type": "commonjs",
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -12,7 +12,7 @@
   "dependencies": {
     "@openzeppelin/contracts": "^4.9.6",
     "dotenv": "^17.4.2",
-    "ethers": "^6.16.0",
+    "ethers": "^6.17.0",
     "framer-motion": "^12.40.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

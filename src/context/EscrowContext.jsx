@@ -1,7 +1,26 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from "react";
-import { BrowserProvider, formatEther } from "ethers";
+import { BrowserProvider, Contract, formatEther, parseEther } from "ethers";
+import EscrowABI from "../contracts/EscrowABI.json"
 
 const EscrowContext = createContext();
+
+// Network Configuration
+const NETWORKS = {
+  1: { name: "Ethereum Mainnet", symbol: "ETH", rpcUrl: "https://eth.publicnode.com" },
+  11155111: { name: "Sepolia Testnet", symbol: "ETH", rpcUrl: "https://sepolia.infura.io/v3/" },
+  31337: { name: "Localhost", symbol: "ETH", rpcUrl: "http://127.0.0.1:8545" },
+  137: { name: "Polygon Mainnet", symbol: "MATIC", rpcUrl: "https://polygon-rpc.com" },
+  80001: { name: "Polygon Mumbai", symbol: "MATIC", rpcUrl: "https://rpc-mumbai.maticvigil.com" }
+};
+
+// Set the correct contract address based on deployment
+const CONTRACT_ADDRESSES = {
+  11155111: "0x02fA79d6efdD391dF136486e79bb8fda356142dE", // Sepolia
+  31337: "0x02fA79d6efdD391dF136486e79bb8fda356142dE",    // Localhost
+  137: "0x02fA79d6efdD391dF136486e79bb8fda356142dE",      // Polygon
+};
+
+const SUPPORTED_CHAIN_IDS = [11155111, 31337, 137]; // Sepolia, Localhost, Polygon
 
 const getShortAddress = (address) => {
   if (!address) return "";
@@ -29,8 +48,9 @@ export const EscrowProvider = ({ children }) => {
   const [transactions, setTransactions] = useState(initialTransactions);
   const [toasts, setToasts] = useState([]);
   const [ethereumProvider, setEthereumProvider] = useState(null);
+  const [contract, setContract] = useState(null);
   const ethereumProviderRef = useRef(null);
-  
+
   // Session state — starts disconnected and role-based only
   const [session, setSession] = useState({
     role: "visitor",
@@ -40,8 +60,46 @@ export const EscrowProvider = ({ children }) => {
     address: null,
     chainId: null,
     chainName: null,
+    networkSupported: false,
     connectionStatus: "idle"
   });
+
+  console.log(session);
+
+  // Helper function to switch network
+  const switchNetwork = async (chainId) => {
+    try {
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: `0x${chainId.toString(16)}` }]
+      });
+      return true;
+    } catch (error) {
+      if (error.code === 4902) {
+        // Network not in MetaMask, try to add it
+        const network = NETWORKS[chainId];
+        if (network && chainId !== 1) { // Don't auto-add mainnet
+          try {
+            await window.ethereum.request({
+              method: "wallet_addEthereumChain",
+              params: [{
+                chainId: `0x${chainId.toString(16)}`,
+                chainName: network.name,
+                nativeCurrency: { name: network.symbol, symbol: network.symbol, decimals: 18 },
+                rpcUrls: [network.rpcUrl]
+              }]
+            });
+            return true;
+          } catch (addError) {
+            console.error("Failed to add network:", addError);
+            return false;
+          }
+        }
+      }
+      console.error("Failed to switch network:", error);
+      return false;
+    }
+  };
 
   // Dynamic system time helper
   const getCurrentDate = () => {
@@ -52,7 +110,7 @@ export const EscrowProvider = ({ children }) => {
   const addToast = (message, type = "info") => {
     const id = Date.now() + Math.random().toString(36).substr(2, 5);
     setToasts((prev) => [...prev, { id, message, type }]);
-    
+
     // Automatically clear toast after 4 seconds
     setTimeout(() => {
       setToasts((prev) => prev.filter((toast) => toast.id !== id));
@@ -65,28 +123,59 @@ export const EscrowProvider = ({ children }) => {
 
   // Role Simulation Actions
   const updateWalletState = async (browserProvider, address) => {
-    const network = await browserProvider.getNetwork();
-    const balanceBN = await browserProvider.getBalance(address);
-    const walletBalance = parseFloat(formatEther(balanceBN));
+    console.log("updateWalletState() called with address:", address);
 
-    setSession((prev) => ({
-      ...prev,
-      connected: true,
-      address,
-      walletBalance,
-      chainId: network.chainId,
-      chainName: network.name || `chain-${network.chainId}`,
-      connectionStatus: "connected"
-    }));
+    try {
+      const network = await browserProvider.getNetwork();
+      console.log("Network Info:", { chainId: network.chainId, name: network.name });
+      
+      const balanceBN = await browserProvider.getBalance(address);
+      const walletBalance = parseFloat(formatEther(balanceBN));
 
-    console.log("Connection successful", { address, chainId: network.chainId, chainName: network.name, walletBalance });
+      const isNetworkSupported = SUPPORTED_CHAIN_IDS.includes(network.chainId);
+      const contractAddress = CONTRACT_ADDRESSES[network.chainId] || CONTRACT_ADDRESSES[11155111];
+
+      console.log("Wallet Balance:", walletBalance, "ETH");
+      console.log("Network Supported:", isNetworkSupported);
+
+      setSession((prev) => ({
+        ...prev,
+        connected: true,
+        address,
+        walletBalance,
+        chainId: network.chainId,
+        chainName: network.name || `chain-${network.chainId}`,
+        networkSupported: isNetworkSupported,
+        connectionStatus: "connected"
+      }));
+
+      // Only create contract if network is supported
+      if (isNetworkSupported) {
+        const signer = await browserProvider.getSigner();
+        const escrowContract = new Contract(
+          contractAddress,
+          EscrowABI.abi,
+          signer
+        );
+        setContract(escrowContract);
+        console.log("✅ Contract initialized on supported network");
+      } else {
+        addToast(`⚠️ Network not supported. Please switch to a supported network (Sepolia, Localhost, or Polygon)`, "warning");
+        setContract(null);
+      }
+
+      console.log("✅ Connection successful", { address: getShortAddress(address), chainId: network.chainId, chainName: network.name, walletBalance });
+    } catch (error) {
+      console.error("❌ Error in updateWalletState:", error);
+      addToast("Failed to update wallet state", "error");
+    }
   };
 
   const connectWallet = async () => {
-    console.log("Connect button clicked");
+    console.log("🔗 Connect wallet button clicked");
 
     if (!window.ethereum) {
-      console.log("MetaMask not detected");
+      console.log("❌ MetaMask not detected");
       addToast("MetaMask not detected. Please install MetaMask to connect.", "error");
       setSession((prev) => ({ ...prev, connectionStatus: "failed" }));
       return;
@@ -95,22 +184,62 @@ export const EscrowProvider = ({ children }) => {
     setSession((prev) => ({ ...prev, connectionStatus: "connecting" }));
 
     try {
+      // Request accounts
       const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
       if (!accounts || accounts.length === 0) {
-        console.log("MetaMask connection failed: no accounts returned.");
+        console.log("❌ MetaMask connection failed: no accounts returned.");
         addToast("MetaMask connection failed: no accounts returned.", "error");
         setSession((prev) => ({ ...prev, connectionStatus: "failed", connected: false }));
         return;
       }
 
       const address = accounts[0];
+      console.log("✅ Account accessed:", getShortAddress(address));
+
       const browserProvider = new BrowserProvider(window.ethereum);
+      const network = await browserProvider.getNetwork();
+      console.log("📡 Current Network - Chain ID:", network.chainId, "Name:", network.name);
+
+      // Check if network is supported
+      if (!SUPPORTED_CHAIN_IDS.includes(network.chainId)) {
+        console.log("⚠️ Unsupported network. Attempting to switch to Sepolia...");
+        addToast("Unsupported network. Switching to Sepolia Testnet...", "info");
+        
+        const switched = await switchNetwork(11155111);
+        if (!switched) {
+          addToast("Failed to switch network. Please manually switch to Sepolia Testnet in MetaMask.", "error");
+          setSession((prev) => ({ ...prev, connectionStatus: "failed" }));
+          return;
+        }
+        addToast("✅ Successfully switched to Sepolia Testnet", "success");
+      }
+
+      // Get signer and create contract
+      const signer = await browserProvider.getSigner();
+      const network2 = await browserProvider.getNetwork();
+      const contractAddress = CONTRACT_ADDRESSES[network2.chainId] || CONTRACT_ADDRESSES[11155111];
+
+      const contract = new Contract(
+        contractAddress,
+        EscrowABI.abi,
+        signer
+      );
+
+      console.log("✅ Contract created at:", contractAddress);
+      setContract(contract);
       setEthereumProvider(browserProvider);
+
+      // Update wallet state
       await updateWalletState(browserProvider, address);
+      addToast("✅ Wallet connected successfully!", "success");
+
     } catch (error) {
-      console.error("MetaMask connection failed", error);
+      console.error("❌ MetaMask connection failed", error);
       const rejected = error?.code === 4001;
-      addToast(rejected ? "MetaMask connection rejected." : "MetaMask connection failed.", "error");
+      addToast(
+        rejected ? "MetaMask connection rejected." : `Connection failed: ${error.message}`,
+        "error"
+      );
       setSession((prev) => ({
         ...prev,
         connected: false,
@@ -125,6 +254,7 @@ export const EscrowProvider = ({ children }) => {
 
   const disconnectWallet = () => {
     setEthereumProvider(null);
+    setContract(null);
     setSession((prev) => ({
       ...prev,
       connected: false,
@@ -132,6 +262,7 @@ export const EscrowProvider = ({ children }) => {
       address: null,
       chainId: null,
       chainName: null,
+      networkSupported: false,
       connectionStatus: "idle"
     }));
     addToast("Wallet disconnected.", "warning");
@@ -147,42 +278,48 @@ export const EscrowProvider = ({ children }) => {
       return;
     }
 
-    console.log("MetaMask detected");
+    console.log("🔍 MetaMask detected - setting up listeners");
     setSession((prev) => ({ ...prev, connectionStatus: "idle", connected: false }));
 
     const handleAccountsChanged = async (accounts) => {
-      console.log("accountsChanged", accounts);
+      console.log("👤 Account changed:", accounts);
       if (!accounts || accounts.length === 0) {
+        console.log("No accounts - disconnecting");
         disconnectWallet();
         return;
       }
+      
       const provider = ethereumProviderRef.current || new BrowserProvider(window.ethereum);
       if (!ethereumProviderRef.current) {
         setEthereumProvider(provider);
       }
+      
       await updateWalletState(provider, accounts[0]);
     };
 
     const handleChainChanged = async () => {
-      console.log("chainChanged");
+      console.log("🔄 Chain changed");
       const provider = ethereumProviderRef.current || new BrowserProvider(window.ethereum);
       if (!ethereumProviderRef.current) {
         setEthereumProvider(provider);
       }
+      
       try {
-        const account = session.address;
-        if (account) {
-          await updateWalletState(provider, account);
+        const network = await provider.getNetwork();
+        console.log("New Chain ID:", network.chainId);
+        
+        if (session.address) {
+          await updateWalletState(provider, session.address);
         } else {
-          const network = await provider.getNetwork();
           setSession((prev) => ({
             ...prev,
             chainId: network.chainId,
-            chainName: network.name || `chain-${network.chainId}`
+            chainName: network.name || `chain-${network.chainId}`,
+            networkSupported: SUPPORTED_CHAIN_IDS.includes(network.chainId)
           }));
         }
       } catch (error) {
-        console.error(error);
+        console.error("Error handling chain change:", error);
       }
     };
 
@@ -234,63 +371,79 @@ export const EscrowProvider = ({ children }) => {
   };
 
   // Smart Contract Interaction Mock functions
-  
+
   // 1. Client Creates Escrow Job
-  const createJob = (title, description, amount, deadline, requirements) => {
-    if (!title || !description || !amount || !deadline) {
-      addToast("Job creation failed: Please fill out all required fields.", "error");
-      return false;
+  const createJob = async (
+    title,
+    description,
+    amount,
+    deadline,
+    requirements,
+    freelancer,
+    mediator
+  ) => {
+
+    if (!contract) {
+      addToast("Please connect wallet first", "error");
+      return;
     }
 
-    const numericAmount = parseFloat(amount);
-    if (numericAmount > session.balance) {
-      addToast("Insufficient balance to lock in escrow!", "error");
-      return false;
+    try {
+
+      const tx = await contract.createJob(
+        freelancer,
+        mediator,
+        title,
+        description,
+        {
+          value: parseEther(amount)
+        }
+      );
+
+      await tx.wait();
+
+      const newJob = {
+        id: Date.now(),
+        title,
+        description,
+        amount: Number(amount),
+        deadline,
+        requirements,
+        freelancer,
+        mediator,
+        status: "Created",
+        history: [
+          {
+            step: "Created",
+            date: getCurrentDate(),
+            title: "Escrow Created",
+            actor: "Client",
+          },
+        ],
+        lastUpdated: new Date().toISOString(),
+      };
+
+      setJobs((prev) => [...prev, newJob]);
+
+      return true;
+
+      addToast(
+        "Job Created Successfully",
+        "success"
+      );
+
+    }
+    catch (error) {
+
+      console.log(error);
+
+      addToast(
+        "Transaction Failed",
+        "error"
+      );
+
     }
 
-    const newId = jobs.length > 0 ? Math.max(...jobs.map(j => j.id)) + 1 : 101;
-    const newJob = {
-      id: newId,
-      title,
-      description,
-      client: session.role === "client" ? "Client" : "UNKNOWN",
-      freelancer: "Freelancer",
-      mediator: "Mediator",
-      amount: numericAmount,
-      deadline,
-      requirements: requirements || "No specific requirements provided.",
-      status: "Created",
-      deliverables: null,
-      history: [
-        { step: "Created", date: getCurrentDate(), title: "Job Created & Funds Locked", actor: `Client` }
-      ],
-      clientFeedback: "",
-      disputeReason: "",
-      disputeSplit: null,
-      lastUpdated: new Date().toISOString()
-    };
-
-    // Deduct client balance
-    setSession(prev => ({ ...prev, balance: prev.balance - numericAmount }));
-    setJobs(prev => [newJob, ...prev]);
-
-    // Record TX
-    const txHash = generateTxHash();
-    const newTx = {
-      txHash,
-      jobId: newId,
-      action: "Job Created",
-      from: "Client",
-      to: "Smart Contract Escrow",
-      amount: numericAmount,
-      timestamp: new Date().toISOString(),
-      blockNumber: Math.floor(19900000 + Math.random() * 50000),
-      gasUsed: Math.floor(115000 + Math.random() * 20000)
-    };
-    setTransactions(prev => [newTx, ...prev]);
-    
-    addToast(`Escrow transaction confirmed! Locked ${numericAmount} ETH in Job #${newId}.`, "success");
-    return true;
   };
 
   // 2. Freelancer Accepts Job
@@ -560,6 +713,7 @@ export const EscrowProvider = ({ children }) => {
         jobs,
         transactions,
         toasts,
+        contract,
         connectWallet,
         disconnectWallet,
         selectRole,
@@ -572,7 +726,10 @@ export const EscrowProvider = ({ children }) => {
         raiseDispute,
         resolveDispute,
         addToast,
-        removeToast
+        removeToast,
+        switchNetwork,
+        NETWORKS,
+        SUPPORTED_CHAIN_IDS
       }}
     >
       {children}

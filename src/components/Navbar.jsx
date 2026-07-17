@@ -4,7 +4,7 @@ import { FiCreditCard, FiChevronDown, FiCopy, FiCheck, FiLayers, FiMenu, FiX, Fi
 import { motion, AnimatePresence } from "framer-motion";
 
 export const Navbar = ({ currentTab, setCurrentTab }) => {
-  const { session, connectWallet, disconnectWallet, selectRole, clearRole } = useEscrow();
+  const { session, connectWallet, disconnectWallet, selectRole, clearRole, switchNetwork, NETWORKS, SUPPORTED_CHAIN_IDS } = useEscrow();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -74,16 +74,20 @@ export const Navbar = ({ currentTab, setCurrentTab }) => {
               disabled
               className="px-5 py-2.5 rounded-xl bg-slate-700 text-sm font-bold text-slate-200 opacity-80 flex items-center gap-2 border border-white/[0.08]"
             >
-              <FiCreditCard className="w-4 h-4" />
+              <FiCreditCard className="w-4 h-4 animate-spin" />
               Connecting...
             </button>
           ) : session.connected ? (
             <div className="relative">
               <button
                 onClick={() => setDropdownOpen(!dropdownOpen)}
-                className="glass-panel glass-panel-hover flex items-center gap-3 px-4 py-2 border border-white/[0.08] text-sm text-slate-100 font-semibold rounded-xl bg-white/[0.01]"
+                className={`glass-panel glass-panel-hover flex items-center gap-3 px-4 py-2 border rounded-xl bg-white/[0.01] text-sm text-slate-100 font-semibold transition-all ${
+                  session.networkSupported 
+                    ? 'border-white/[0.08]' 
+                    : 'border-rose-500/40 bg-rose-500/5'
+                }`}
               >
-                <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                <div className={`w-2.5 h-2.5 rounded-full ${session.networkSupported ? 'bg-emerald-400' : 'bg-rose-400'} animate-pulse`} />
                 <span className="font-semibold uppercase">{getShortAddress(session.address)}</span>
                 <FiChevronDown className={`w-4 h-4 transition-transform duration-300 ${dropdownOpen ? "rotate-180" : ""}`} />
               </button>
@@ -102,15 +106,79 @@ export const Navbar = ({ currentTab, setCurrentTab }) => {
                       <div className="flex flex-col gap-1 border-b border-white/[0.06] pb-3">
                         <span className="text-xs text-slate-500 uppercase tracking-widest font-bold">Wallet</span>
                         <div className="mt-1 text-slate-300 text-sm font-semibold">{getShortAddress(session.address)}</div>
-                        <div className="text-xs text-slate-400">Network: {session.chainName || "unknown"}</div>
-                        <div className="text-xs text-slate-400">Chain ID: {session.chainId ?? "N/A"}</div>
-                        <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/[0.04]">
-                          <span className="text-xs text-slate-400">Wallet Balance:</span>
-                          <span className="font-semibold text-cyan-300">{session.walletBalance === null ? "N/A" : `${session.walletBalance.toFixed(4)} ETH`}</span>
+                        
+                        {/* Network Info */}
+                        <div className="mt-2 flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${session.networkSupported ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
+                          <div className="flex flex-col gap-0.5">
+                            <div className="text-xs text-slate-400">Network: <span className="font-semibold text-slate-300">{session.chainName || "unknown"}</span></div>
+                            <div className="text-xs text-slate-400">Chain ID: <span className="font-semibold text-slate-300">{session.chainId ?? "N/A"}</span></div>
+                            {!session.networkSupported && (
+                              <div className="text-xs text-rose-400 font-semibold mt-1">⚠️ Unsupported Network</div>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex items-center justify-between mt-1 text-xs text-slate-400">
+
+                        {/* Wallet Balance - More Prominent */}
+                        <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/[0.04] bg-gradient-to-r from-cyan-500/5 to-purple-500/5 p-2 rounded-lg">
+                          <span className="text-xs text-slate-400 font-semibold">Balance</span>
+                          <span className="font-bold text-cyan-300 text-lg">
+                            {session.walletBalance === null ? (
+                              <span className="text-sm text-slate-400">Loading...</span>
+                            ) : (
+                              `${session.walletBalance.toFixed(4)} ${session.chainName?.includes('Polygon') ? 'MATIC' : 'ETH'}`
+                            )}
+                          </span>
+                        </div>
+                        
+                        <div className="flex items-center justify-between mt-2 text-xs text-slate-400">
                           <span>Simulated Role</span>
                           <span className="font-semibold text-cyan-300 uppercase">{session.role}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-2">
+                        <span className="text-xs text-slate-500 uppercase tracking-widest font-bold">Switch Network</span>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            onClick={async () => {
+                              await switchNetwork(11155111); // Sepolia
+                              setDropdownOpen(false);
+                            }}
+                            className={`px-2 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                              session.chainId === 11155111
+                                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
+                                : "bg-white/[0.01] border-white/[0.04] text-slate-400 hover:text-white hover:border-white/10"
+                            }`}
+                          >
+                            Sepolia
+                          </button>
+                          <button
+                            onClick={async () => {
+                              await switchNetwork(137); // Polygon
+                              setDropdownOpen(false);
+                            }}
+                            className={`px-2 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                              session.chainId === 137
+                                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
+                                : "bg-white/[0.01] border-white/[0.04] text-slate-400 hover:text-white hover:border-white/10"
+                            }`}
+                          >
+                            Polygon
+                          </button>
+                          <button
+                            onClick={async () => {
+                              await switchNetwork(31337); // Localhost
+                              setDropdownOpen(false);
+                            }}
+                            className={`px-2 py-1.5 rounded-lg text-xs font-bold border transition-all col-span-2 ${
+                              session.chainId === 31337
+                                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
+                                : "bg-white/[0.01] border-white/[0.04] text-slate-400 hover:text-white hover:border-white/10"
+                            }`}
+                          >
+                            Localhost
+                          </button>
                         </div>
                       </div>
 
