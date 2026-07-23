@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from "react";
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
 import { BrowserProvider, Contract, formatEther, parseEther } from "ethers";
 import EscrowABI from "../contracts/EscrowABI.json"
 
@@ -27,16 +28,6 @@ const getShortAddress = (address) => {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 };
 
-// Dynamic Helper to generate realistic TX Hashes
-const generateTxHash = () => {
-  const chars = "0123456789abcdef";
-  let hash = "0x";
-  for (let i = 0; i < 64; i++) {
-    hash += chars[Math.floor(Math.random() * 16)];
-  }
-  return hash;
-};
-
 // No pre-loaded demo data — app starts clean
 const initialJobs = [];
 
@@ -50,6 +41,7 @@ export const EscrowProvider = ({ children }) => {
   const [ethereumProvider, setEthereumProvider] = useState(null);
   const [contract, setContract] = useState(null);
   const ethereumProviderRef = useRef(null);
+  const sessionRef = useRef(null);
 
   // Session state — starts disconnected and role-based only
   const [session, setSession] = useState({
@@ -60,6 +52,7 @@ export const EscrowProvider = ({ children }) => {
     address: null,
     chainId: null,
     chainName: null,
+    nativeCurrency: "ETH",
     networkSupported: false,
     connectionStatus: "idle"
   });
@@ -101,13 +94,8 @@ export const EscrowProvider = ({ children }) => {
     }
   };
 
-  // Dynamic system time helper
-  const getCurrentDate = () => {
-    return new Date().toISOString().split("T")[0];
-  };
-
   // Toast System Emitter
-  const addToast = (message, type = "info") => {
+  const addToast = useCallback((message, type = "info") => {
     const id = Date.now() + Math.random().toString(36).substr(2, 5);
     setToasts((prev) => [...prev, { id, message, type }]);
 
@@ -115,27 +103,30 @@ export const EscrowProvider = ({ children }) => {
     setTimeout(() => {
       setToasts((prev) => prev.filter((toast) => toast.id !== id));
     }, 4000);
-  };
+  }, []);
 
-  const removeToast = (id) => {
+  const removeToast = useCallback((id) => {
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
-  };
+  }, []);
 
   // Role Simulation Actions
-  const updateWalletState = async (browserProvider, address) => {
+  const updateWalletState = useCallback(async (browserProvider, address) => {
     console.log("updateWalletState() called with address:", address);
 
     try {
       const network = await browserProvider.getNetwork();
-      console.log("Network Info:", { chainId: network.chainId, name: network.name });
+      const chainId = Number(network.chainId);
+      const chainName = NETWORKS[chainId]?.name || network.name || `chain-${chainId}`;
+      const nativeCurrency = NETWORKS[chainId]?.symbol || "ETH";
+      console.log("Network Info:", { chainId, name: chainName });
       
       const balanceBN = await browserProvider.getBalance(address);
       const walletBalance = parseFloat(formatEther(balanceBN));
 
-      const isNetworkSupported = SUPPORTED_CHAIN_IDS.includes(network.chainId);
-      const contractAddress = CONTRACT_ADDRESSES[network.chainId] || CONTRACT_ADDRESSES[11155111];
+      const isNetworkSupported = SUPPORTED_CHAIN_IDS.includes(chainId);
+      const contractAddress = CONTRACT_ADDRESSES[chainId];
 
-      console.log("Wallet Balance:", walletBalance, "ETH");
+      console.log("Wallet Balance:", walletBalance, nativeCurrency);
       console.log("Network Supported:", isNetworkSupported);
 
       setSession((prev) => ({
@@ -143,14 +134,14 @@ export const EscrowProvider = ({ children }) => {
         connected: true,
         address,
         walletBalance,
-        chainId: network.chainId,
-        chainName: network.name || `chain-${network.chainId}`,
+        chainId,
+        chainName,
+        nativeCurrency,
         networkSupported: isNetworkSupported,
         connectionStatus: "connected"
       }));
 
-      // Only create contract if network is supported
-      if (isNetworkSupported) {
+      if (isNetworkSupported && contractAddress) {
         const signer = await browserProvider.getSigner();
         const escrowContract = new Contract(
           contractAddress,
@@ -159,17 +150,20 @@ export const EscrowProvider = ({ children }) => {
         );
         setContract(escrowContract);
         console.log("✅ Contract initialized on supported network");
-      } else {
-        addToast(`⚠️ Network not supported. Please switch to a supported network (Sepolia, Localhost, or Polygon)`, "warning");
-        setContract(null);
+        return escrowContract;
       }
 
-      console.log("✅ Connection successful", { address: getShortAddress(address), chainId: network.chainId, chainName: network.name, walletBalance });
+      if (!isNetworkSupported) {
+        addToast(`⚠️ Network not supported. Please switch to a supported network (Sepolia, Localhost, or Polygon).`, "warning");
+      }
+      setContract(null);
+      return null;
     } catch (error) {
       console.error("❌ Error in updateWalletState:", error);
       addToast("Failed to update wallet state", "error");
+      return null;
     }
-  };
+  }, [addToast]);
 
   const connectWallet = async () => {
     console.log("🔗 Connect wallet button clicked");
@@ -198,38 +192,13 @@ export const EscrowProvider = ({ children }) => {
 
       const browserProvider = new BrowserProvider(window.ethereum);
       const network = await browserProvider.getNetwork();
-      console.log("📡 Current Network - Chain ID:", network.chainId, "Name:", network.name);
+      const chainId = Number(network.chainId);
+      const chainName = NETWORKS[chainId]?.name || network.name || `chain-${chainId}`;
+      console.log("📡 Current Network - Chain ID:", chainId, "Name:", chainName);
 
-      // Check if network is supported
-      if (!SUPPORTED_CHAIN_IDS.includes(network.chainId)) {
-        console.log("⚠️ Unsupported network. Attempting to switch to Sepolia...");
-        addToast("Unsupported network. Switching to Sepolia Testnet...", "info");
-        
-        const switched = await switchNetwork(11155111);
-        if (!switched) {
-          addToast("Failed to switch network. Please manually switch to Sepolia Testnet in MetaMask.", "error");
-          setSession((prev) => ({ ...prev, connectionStatus: "failed" }));
-          return;
-        }
-        addToast("✅ Successfully switched to Sepolia Testnet", "success");
-      }
-
-      // Get signer and create contract
-      const signer = await browserProvider.getSigner();
-      const network2 = await browserProvider.getNetwork();
-      const contractAddress = CONTRACT_ADDRESSES[network2.chainId] || CONTRACT_ADDRESSES[11155111];
-
-      const contract = new Contract(
-        contractAddress,
-        EscrowABI.abi,
-        signer
-      );
-
-      console.log("✅ Contract created at:", contractAddress);
-      setContract(contract);
       setEthereumProvider(browserProvider);
 
-      // Update wallet state
+      // Update wallet state and always reflect current MetaMask network
       await updateWalletState(browserProvider, address);
       addToast("✅ Wallet connected successfully!", "success");
 
@@ -252,7 +221,7 @@ export const EscrowProvider = ({ children }) => {
     }
   };
 
-  const disconnectWallet = () => {
+  const disconnectWallet = useCallback(() => {
     setEthereumProvider(null);
     setContract(null);
     setSession((prev) => ({
@@ -262,77 +231,20 @@ export const EscrowProvider = ({ children }) => {
       address: null,
       chainId: null,
       chainName: null,
+      nativeCurrency: "ETH",
       networkSupported: false,
       connectionStatus: "idle"
     }));
     addToast("Wallet disconnected.", "warning");
-  };
+  }, [addToast]);
 
   useEffect(() => {
     ethereumProviderRef.current = ethereumProvider;
   }, [ethereumProvider]);
 
   useEffect(() => {
-    if (!window.ethereum) {
-      console.log("MetaMask not detected");
-      return;
-    }
-
-    console.log("🔍 MetaMask detected - setting up listeners");
-    setSession((prev) => ({ ...prev, connectionStatus: "idle", connected: false }));
-
-    const handleAccountsChanged = async (accounts) => {
-      console.log("👤 Account changed:", accounts);
-      if (!accounts || accounts.length === 0) {
-        console.log("No accounts - disconnecting");
-        disconnectWallet();
-        return;
-      }
-      
-      const provider = ethereumProviderRef.current || new BrowserProvider(window.ethereum);
-      if (!ethereumProviderRef.current) {
-        setEthereumProvider(provider);
-      }
-      
-      await updateWalletState(provider, accounts[0]);
-    };
-
-    const handleChainChanged = async () => {
-      console.log("🔄 Chain changed");
-      const provider = ethereumProviderRef.current || new BrowserProvider(window.ethereum);
-      if (!ethereumProviderRef.current) {
-        setEthereumProvider(provider);
-      }
-      
-      try {
-        const network = await provider.getNetwork();
-        console.log("New Chain ID:", network.chainId);
-        
-        if (session.address) {
-          await updateWalletState(provider, session.address);
-        } else {
-          setSession((prev) => ({
-            ...prev,
-            chainId: network.chainId,
-            chainName: network.name || `chain-${network.chainId}`,
-            networkSupported: SUPPORTED_CHAIN_IDS.includes(network.chainId)
-          }));
-        }
-      } catch (error) {
-        console.error("Error handling chain change:", error);
-      }
-    };
-
-    window.ethereum.on("accountsChanged", handleAccountsChanged);
-    window.ethereum.on("chainChanged", handleChainChanged);
-
-    return () => {
-      if (window.ethereum?.removeListener) {
-        window.ethereum.removeListener("accountsChanged", handleAccountsChanged);
-        window.ethereum.removeListener("chainChanged", handleChainChanged);
-      }
-    };
-  }, []);
+    sessionRef.current = session;
+  }, [session]);
 
   const selectRole = (role) => {
     let mockBalance = 10.0;
@@ -370,7 +282,250 @@ export const EscrowProvider = ({ children }) => {
     addToast("Role cleared.", "warning");
   };
 
-  // Smart Contract Interaction Mock functions
+  const parseJob = (jobStruct) => {
+    const statusNames = [
+      "Created",
+      "Active",
+      "Submitted",
+      "NotApproved",
+      "Disputed",
+      "Paid",
+      "Refunded"
+    ];
+
+    return {
+      id: Number(jobStruct.id.toString()),
+      client: jobStruct.client,
+      freelancer: jobStruct.freelancer,
+      mediator: jobStruct.mediator,
+      amount: Number(formatEther(jobStruct.amount)),
+      title: jobStruct.title,
+      description: jobStruct.description,
+      deliverableHash: jobStruct.deliverableHash,
+      status: statusNames[Number(jobStruct.status.toString())] || "Unknown",
+      createdAt: new Date(Number(jobStruct.createdAt.toString()) * 1000).toISOString(),
+      history: [],
+    };
+  };
+
+  const mergeJobMetadata = (onchainJob, prevJob) => {
+    if (!onchainJob) {
+      return prevJob;
+    }
+
+    return {
+      ...onchainJob,
+      deadline: prevJob?.deadline ?? onchainJob.deadline,
+      requirements: prevJob?.requirements ?? onchainJob.requirements,
+      deliverables: prevJob?.deliverables ?? onchainJob.deliverables,
+      clientFeedback: prevJob?.clientFeedback ?? onchainJob.clientFeedback,
+      disputeReason: prevJob?.disputeReason ?? onchainJob.disputeReason,
+      disputeSplit: prevJob?.disputeSplit ?? onchainJob.disputeSplit,
+      history: prevJob?.history ?? onchainJob.history ?? [],
+      lastUpdated: prevJob?.lastUpdated ?? onchainJob.lastUpdated ?? new Date().toISOString()
+    };
+  };
+
+  const addTransactionRecord = (tx, receipt, jobId, action, from, to, amount) => {
+    setTransactions((prev) => [
+      {
+        txHash: tx.hash,
+        jobId,
+        action,
+        from,
+        to,
+        amount,
+        timestamp: new Date().toISOString(),
+        blockNumber: receipt.blockNumber,
+        gasUsed: Number(receipt.gasUsed?.toString() || 0)
+      },
+      ...prev
+    ]);
+  };
+
+  const fetchJobFromContract = useCallback(async (jobId) => {
+    if (!contract) {
+      return null;
+    }
+
+    try {
+      const jobStruct = await contract.getJob(jobId);
+      return parseJob(jobStruct);
+    } catch (error) {
+      console.error("Failed to fetch job from contract:", error);
+      addToast("Unable to fetch job from contract.", "error");
+      return null;
+    }
+  }, [contract, addToast]);
+
+  const refreshJobsFromContract = useCallback(async () => {
+    if (!contract) {
+      return;
+    }
+
+    try {
+      const countBn = await contract.jobCount();
+      const count = Number(countBn.toString());
+
+      if (count <= 0) {
+        setJobs([]);
+        return;
+      }
+
+      const fetches = [];
+      for (let i = 1; i <= count; i += 1) {
+        fetches.push(fetchJobFromContract(i));
+      }
+
+      const loadedJobs = (await Promise.all(fetches)).filter(Boolean);
+      setJobs(loadedJobs);
+    } catch (error) {
+      console.error("Failed to refresh jobs from contract:", error);
+      addToast("Unable to refresh jobs from blockchain.", "error");
+    }
+  }, [contract, fetchJobFromContract, addToast]);
+
+  useEffect(() => {
+    if (!window.ethereum) {
+      console.log("MetaMask not detected");
+      return;
+    }
+
+    console.log("🔍 MetaMask detected - setting up listeners");
+
+    const normalizeChainId = (chainId) => {
+      if (typeof chainId === "string" && chainId.startsWith("0x")) {
+        return Number.parseInt(chainId, 16);
+      }
+      return Number(chainId);
+    };
+
+    const handleAccountsChanged = async (accounts) => {
+      if (!accounts || accounts.length === 0) {
+        console.log("🔌 MetaMask account disconnected");
+        disconnectWallet();
+        return;
+      }
+
+      const address = accounts[0];
+      console.log("🔄 MetaMask account changed to", address);
+
+      const browserProvider = ethereumProviderRef.current || new BrowserProvider(window.ethereum);
+      if (!ethereumProviderRef.current) {
+        setEthereumProvider(browserProvider);
+      }
+      const updatedContract = await updateWalletState(browserProvider, address);
+      if (updatedContract) {
+        await refreshJobsFromContract();
+      }
+    };
+
+    const handleChainChanged = async (chainId) => {
+      try {
+        const normalizedChainId = normalizeChainId(chainId);
+        console.log("🌐 MetaMask chain changed to", normalizedChainId);
+
+        disconnectWallet();
+        addToast(
+          `Network changed to ${NETWORKS[normalizedChainId]?.name || `chain ${normalizedChainId}`}. Please reconnect.`,
+          "warning"
+        );
+      } catch (error) {
+        console.error(error);
+      }
+    };
+
+    window.ethereum.on("accountsChanged", handleAccountsChanged);
+    window.ethereum.on("chainChanged", handleChainChanged);
+
+    return () => {
+      window.ethereum.removeListener("accountsChanged", handleAccountsChanged);
+      window.ethereum.removeListener("chainChanged", handleChainChanged);
+    };
+  }, [disconnectWallet, refreshJobsFromContract, updateWalletState, addToast]);
+
+  const syncJob = useCallback(async (jobId) => {
+    const loadedJob = await fetchJobFromContract(jobId);
+    if (!loadedJob) {
+      return;
+    }
+
+    setJobs((prev) => {
+      const existing = prev.find((job) => job.id === loadedJob.id);
+      const mergedJob = mergeJobMetadata(loadedJob, existing);
+      if (existing) {
+        return prev.map((job) => (job.id === loadedJob.id ? mergedJob : job));
+      }
+      return [mergedJob, ...prev];
+    });
+  }, [fetchJobFromContract]);
+
+  useEffect(() => {
+    if (!contract) {
+      return;
+    }
+
+    const initializeJobs = async () => {
+      await refreshJobsFromContract();
+    };
+
+    initializeJobs();
+
+    const normalizeId = (jobId) => Number(jobId.toString());
+
+    const handleJobCreated = async (jobId) => {
+      await syncJob(normalizeId(jobId));
+      addToast(`Job #${normalizeId(jobId)} created on-chain.`, "success");
+    };
+
+    const handleJobAccepted = async (jobId) => {
+      await syncJob(normalizeId(jobId));
+      addToast(`Job #${normalizeId(jobId)} was accepted by the freelancer.`, "success");
+    };
+
+    const handleWorkSubmitted = async (jobId) => {
+      await syncJob(normalizeId(jobId));
+      addToast(`Work submitted for Job #${normalizeId(jobId)}.`, "info");
+    };
+
+    const handleWorkRejected = async (jobId, reason) => {
+      await syncJob(normalizeId(jobId));
+      addToast(`Work rejected for Job #${normalizeId(jobId)}: ${reason}`, "warning");
+    };
+
+    const handleFundsReleased = async (jobId) => {
+      await syncJob(normalizeId(jobId));
+      addToast(`Funds released for Job #${normalizeId(jobId)}.`, "success");
+    };
+
+    const handleDisputeRaised = async (jobId) => {
+      await syncJob(normalizeId(jobId));
+      addToast(`Dispute raised for Job #${normalizeId(jobId)}.`, "error");
+    };
+
+    const handleDisputeResolved = async (jobId) => {
+      await syncJob(normalizeId(jobId));
+      addToast(`Dispute resolved for Job #${normalizeId(jobId)}.`, "success");
+    };
+
+    contract.on("JobCreated", handleJobCreated);
+    contract.on("JobAccepted", handleJobAccepted);
+    contract.on("WorkSubmitted", handleWorkSubmitted);
+    contract.on("WorkRejected", handleWorkRejected);
+    contract.on("FundsReleased", handleFundsReleased);
+    contract.on("DisputeRaised", handleDisputeRaised);
+    contract.on("DisputeResolved", handleDisputeResolved);
+
+    return () => {
+      contract.off("JobCreated", handleJobCreated);
+      contract.off("JobAccepted", handleJobAccepted);
+      contract.off("WorkSubmitted", handleWorkSubmitted);
+      contract.off("WorkRejected", handleWorkRejected);
+      contract.off("FundsReleased", handleFundsReleased);
+      contract.off("DisputeRaised", handleDisputeRaised);
+      contract.off("DisputeResolved", handleDisputeResolved);
+    };
+  }, [contract, refreshJobsFromContract, syncJob, addToast]);
 
   // 1. Client Creates Escrow Job
   const createJob = async (
@@ -382,14 +537,12 @@ export const EscrowProvider = ({ children }) => {
     freelancer,
     mediator
   ) => {
-
     if (!contract) {
       addToast("Please connect wallet first", "error");
-      return;
+      return false;
     }
 
     try {
-
       const tx = await contract.createJob(
         freelancer,
         mediator,
@@ -400,10 +553,19 @@ export const EscrowProvider = ({ children }) => {
         }
       );
 
-      await tx.wait();
+      const receipt = await tx.wait();
+      const event = receipt.events?.find(
+        (e) => e.event === "JobCreated" || e.eventName === "JobCreated"
+      );
+      let newJobId = event?.args?.jobId?.toNumber();
 
-      const newJob = {
-        id: Date.now(),
+      if (!newJobId) {
+        const countBn = await contract.jobCount();
+        newJobId = Number(countBn.toString());
+      }
+
+      const localJobMeta = {
+        id: newJobId,
         title,
         description,
         amount: Number(amount),
@@ -412,298 +574,257 @@ export const EscrowProvider = ({ children }) => {
         freelancer,
         mediator,
         status: "Created",
+        deliverableHash: "",
         history: [
           {
             step: "Created",
-            date: getCurrentDate(),
+            date: new Date().toISOString(),
             title: "Escrow Created",
-            actor: "Client",
-          },
+            actor: "Client"
+          }
         ],
-        lastUpdated: new Date().toISOString(),
+        lastUpdated: new Date().toISOString()
       };
 
-      setJobs((prev) => [...prev, newJob]);
+      if (newJobId) {
+        setJobs((prev) => [...prev, localJobMeta]);
+        await syncJob(newJobId);
+      }
 
+      addTransactionRecord(
+        tx,
+        receipt,
+        newJobId,
+        "Job Created",
+        session.address,
+        "Escrow Contract",
+        Number(amount)
+      );
+
+      addToast("Job created successfully.", "success");
       return true;
-
-      addToast(
-        "Job Created Successfully",
-        "success"
-      );
-
+    } catch (error) {
+      console.error(error);
+      addToast("Transaction Failed", "error");
+      return false;
     }
-    catch (error) {
-
-      console.log(error);
-
-      addToast(
-        "Transaction Failed",
-        "error"
-      );
-
-    }
-
   };
 
   // 2. Freelancer Accepts Job
-  const acceptJob = (jobId) => {
-    setJobs(prev => prev.map(job => {
-      if (job.id === jobId && job.status === "Created") {
-        return {
-          ...job,
-          status: "Active",
-          history: [
-            ...job.history,
-            { step: "Active", date: getCurrentDate(), title: "Job Accepted & Work Started", actor: "Freelancer" }
-          ],
-          lastUpdated: new Date().toISOString()
-        };
+  const acceptJob = async (jobId) => {
+    if (!contract) {
+      addToast("Please connect wallet first", "error");
+      return false;
+    }
+
+    const job = jobs.find((item) => item.id === jobId);
+    if (job && session.address) {
+      const connected = session.address.toLowerCase();
+      const assigned = job.freelancer?.toLowerCase();
+      if (assigned && connected !== assigned) {
+        addToast(
+          `Connected wallet does not match Job #${jobId} freelancer. Use ${getShortAddress(job.freelancer)} or change the job assignment.`,
+          "error"
+        );
+        return false;
       }
-      return job;
-    }));
+    }
 
-    // Record TX
-    const txHash = generateTxHash();
-    const newTx = {
-      txHash,
-      jobId,
-      action: "Job Accepted",
-      from: "Freelancer",
-      to: "Smart Contract Escrow",
-      amount: 0,
-      timestamp: new Date().toISOString(),
-      blockNumber: Math.floor(19900000 + Math.random() * 50000),
-      gasUsed: Math.floor(40000 + Math.random() * 10000)
-    };
-    setTransactions(prev => [newTx, ...prev]);
+    try {
+      const tx = await contract.acceptJob(jobId);
+      const receipt = await tx.wait();
 
-    addToast(`You accepted Job #${jobId}. Project is now Active!`, "success");
+      await syncJob(jobId);
+      addTransactionRecord(tx, receipt, jobId, "Job Accepted", session.address, "Escrow Contract", 0);
+
+      addToast(`You accepted Job #${jobId}. Project is now Active!`, "success");
+      return true;
+    } catch (error) {
+      console.error("acceptJob failed:", error);
+      const reason = error?.reason || error?.data?.message || error?.message || "Failed to accept job on contract.";
+      addToast(`Failed to accept job on contract: ${reason}`, "error");
+      return false;
+    }
   };
 
   // 3. Freelancer Submits Work
-  const submitWork = (jobId, githubUrl, ipfsHash, driveUrl, notes) => {
+  const submitWork = async (jobId, githubUrl, ipfsHash, driveUrl, notes) => {
+    if (!contract) {
+      addToast("Please connect wallet first", "error");
+      return false;
+    }
+
     if (!githubUrl && !ipfsHash && !driveUrl) {
       addToast("Submission failed: Please provide at least one link / hash.", "error");
       return false;
     }
 
-    setJobs(prev => prev.map(job => {
-      if (job.id === jobId && (job.status === "Active" || job.status === "NotApproved")) {
-        return {
-          ...job,
-          status: "Submitted",
-          deliverables: { githubUrl, ipfsHash, driveUrl, notes },
-          history: [
-            ...job.history,
-            { step: "Submitted", date: getCurrentDate(), title: "Work Submitted for Review", actor: "Freelancer" }
-          ],
-          lastUpdated: new Date().toISOString()
-        };
-      }
-      return job;
-    }));
+    const deliverableHash = ipfsHash || githubUrl || driveUrl;
 
-    // Record TX
-    const txHash = generateTxHash();
-    const newTx = {
-      txHash,
-      jobId,
-      action: "Work Submitted",
-      from: "Freelancer",
-      to: "Smart Contract Escrow",
-      amount: 0,
-      timestamp: new Date().toISOString(),
-      blockNumber: Math.floor(19900000 + Math.random() * 50000),
-      gasUsed: Math.floor(80000 + Math.random() * 15000)
-    };
-    setTransactions(prev => [newTx, ...prev]);
+    try {
+      setJobs((prev) => prev.map((job) => {
+        if (job.id === jobId) {
+          return {
+            ...job,
+            deliverables: { githubUrl, ipfsHash, driveUrl, notes },
+            deliverableHash,
+          };
+        }
+        return job;
+      }));
 
-    addToast(`Deliverables submitted successfully for Job #${jobId}! Client notified.`, "success");
-    return true;
+      const tx = await contract.submitWork(jobId, deliverableHash);
+      const receipt = await tx.wait();
+
+      await syncJob(jobId);
+      addTransactionRecord(tx, receipt, jobId, "Work Submitted", session.address, "Escrow Contract", 0);
+
+      addToast(`Deliverables submitted successfully for Job #${jobId}! Client notified.`, "success");
+      return true;
+    } catch (error) {
+      console.error(error);
+      addToast("Failed to submit work on contract.", "error");
+      return false;
+    }
   };
 
   // 4. Client Approves Work (Releases Funds)
-  const approveWork = (jobId, feedback) => {
-    let releasedAmount = 0;
-
-    setJobs(prev => prev.map(job => {
-      if (job.id === jobId && job.status === "Submitted") {
-        releasedAmount = job.amount;
-        return {
-          ...job,
-          status: "Paid",
-          clientFeedback: feedback || "Work approved! Outstanding results.",
-          history: [
-            ...job.history,
-            { step: "Approved", date: getCurrentDate(), title: "Work Approved by Client", actor: "Client" },
-            { step: "Paid", date: getCurrentDate(), title: "Escrow Released to Freelancer", actor: "Smart Contract Escrow" }
-          ],
-          lastUpdated: new Date().toISOString()
-        };
-      }
-      return job;
-    }));
-
-    // If active session is the freelancer, simulate their balance update
-    if (session.role === "freelancer") {
-      setSession(prev => ({ ...prev, balance: prev.balance + releasedAmount }));
+  const approveWork = async (jobId, feedback) => {
+    if (!contract) {
+      addToast("Please connect wallet first", "error");
+      return false;
     }
 
-    // Record TX
-    const txHash = generateTxHash();
-    const newTx = {
-      txHash,
-      jobId,
-      action: "Funds Released",
-      from: "Smart Contract Escrow",
-      to: "Freelancer",
-      amount: releasedAmount,
-      timestamp: new Date().toISOString(),
-      blockNumber: Math.floor(19900000 + Math.random() * 50000),
-      gasUsed: Math.floor(60000 + Math.random() * 12000)
-    };
-    setTransactions(prev => [newTx, ...prev]);
+    try {
+      setJobs((prev) => prev.map((job) => {
+        if (job.id === jobId) {
+          return {
+            ...job,
+            clientFeedback: feedback || job.clientFeedback,
+          };
+        }
+        return job;
+      }));
 
-    addToast(`Escrow released! ${releasedAmount} ETH paid to Freelancer.`, "success");
+      const job = jobs.find((item) => item.id === jobId);
+      const releasedAmount = job?.amount || 0;
+
+      const tx = await contract.approveWork(jobId);
+      const receipt = await tx.wait();
+
+      await syncJob(jobId);
+      addTransactionRecord(tx, receipt, jobId, "Funds Released", "Escrow Contract", job?.freelancer || "Freelancer", releasedAmount);
+
+      if (session.role === "freelancer") {
+        setSession((prev) => ({ ...prev, balance: prev.balance + releasedAmount }));
+      }
+
+      addToast(`Escrow released! ${releasedAmount} ETH paid to Freelancer.`, "success");
+      return true;
+    } catch (error) {
+      console.error(error);
+      addToast("Failed to approve work on contract.", "error");
+      return false;
+    }
   };
 
   // 5. Client Rejects Work (Request Updates)
-  const rejectWork = (jobId, feedback) => {
+  const rejectWork = async (jobId, feedback) => {
+    if (!contract) {
+      addToast("Please connect wallet first", "error");
+      return false;
+    }
+
     if (!feedback) {
       addToast("Rejection failed: Please specify feedback details.", "error");
       return false;
     }
 
-    setJobs(prev => prev.map(job => {
-      if (job.id === jobId && job.status === "Submitted") {
-        return {
-          ...job,
-          status: "NotApproved",
-          clientFeedback: feedback,
-          history: [
-            ...job.history,
-            { step: "NotApproved", date: getCurrentDate(), title: "Work Rejected & Feedback Sent", actor: "Client" }
-          ],
-          lastUpdated: new Date().toISOString()
-        };
-      }
-      return job;
-    }));
+    try {
+      const tx = await contract.rejectWork(jobId, feedback);
+      const receipt = await tx.wait();
 
-    // Record TX
-    const txHash = generateTxHash();
-    const newTx = {
-      txHash,
-      jobId,
-      action: "Work Rejected",
-      from: "Client",
-      to: "Smart Contract Escrow",
-      amount: 0,
-      timestamp: new Date().toISOString(),
-      blockNumber: Math.floor(19900000 + Math.random() * 50000),
-      gasUsed: Math.floor(50000 + Math.random() * 10000)
-    };
-    setTransactions(prev => [newTx, ...prev]);
+      await syncJob(jobId);
+      addTransactionRecord(tx, receipt, jobId, "Work Rejected", session.address, "Escrow Contract", 0);
 
-    addToast(`Work rejected. Requested freelancer updates for Job #${jobId}.`, "warning");
-    return true;
+      addToast(`Work rejected. Requested freelancer updates for Job #${jobId}.`, "warning");
+      return true;
+    } catch (error) {
+      console.error(error);
+      addToast("Failed to reject work on contract.", "error");
+      return false;
+    }
   };
 
   // 6. Raise Dispute
-  const raiseDispute = (jobId, reason) => {
+  const raiseDispute = async (jobId, reason) => {
+    if (!contract) {
+      addToast("Please connect wallet first", "error");
+      return false;
+    }
+
     if (!reason) {
       addToast("Escalation failed: Please specify dispute reason.", "error");
       return false;
     }
 
-    setJobs(prev => prev.map(job => {
-      if (job.id === jobId && (job.status === "Active" || job.status === "Submitted" || job.status === "NotApproved")) {
-        const actorRole = session.role === "client" ? "Client" : "Freelancer";
-        return {
-          ...job,
-          status: "Disputed",
-          disputeReason: reason,
-          history: [
-            ...job.history,
-            { step: "Disputed", date: getCurrentDate(), title: "Dispute Escalated to Mediator", actor: actorRole }
-          ],
-          lastUpdated: new Date().toISOString()
-        };
-      }
-      return job;
-    }));
+    try {
+      const tx = await contract.raiseDispute(jobId);
+      const receipt = await tx.wait();
 
-    // Record TX
-    const txHash = generateTxHash();
-    const newTx = {
-      txHash,
-      jobId,
-      action: "Dispute Raised",
-      from: session.role === "client" ? "Client" : "Freelancer",
-      to: "Smart Contract Escrow",
-      amount: 0,
-      timestamp: new Date().toISOString(),
-      blockNumber: Math.floor(19900000 + Math.random() * 50000),
-      gasUsed: Math.floor(65000 + Math.random() * 10000)
-    };
-    setTransactions(prev => [newTx, ...prev]);
+      await syncJob(jobId);
+      addTransactionRecord(tx, receipt, jobId, "Dispute Raised", session.address, "Escrow Contract", 0);
 
-    addToast(`Job #${jobId} is now locked in DISPUTE. Mediator notified.`, "error");
-    return true;
+      addToast(`Job #${jobId} is now locked in DISPUTE. Mediator notified.`, "error");
+      return true;
+    } catch (error) {
+      console.error(error);
+      addToast("Failed to raise dispute on contract.", "error");
+      return false;
+    }
   };
 
   // 7. Mediator Resolves Dispute
-  const resolveDispute = (jobId, freelancerPct, clientPct) => {
-    let freelancerShare = 0;
-    let clientShare = 0;
-
-    setJobs(prev => prev.map(job => {
-      if (job.id === jobId && job.status === "Disputed") {
-        freelancerShare = parseFloat(((job.amount * freelancerPct) / 100).toFixed(4));
-        clientShare = parseFloat(((job.amount * clientPct) / 100).toFixed(4));
-
-        const isFullyClient = clientPct === 100;
-        const finalStatus = isFullyClient ? "Refunded" : "Paid";
-        const resolveTitle = `Dispute Resolved: ${freelancerPct}% Freelancer / ${clientPct}% Client`;
-
-        return {
-          ...job,
-          status: finalStatus,
-          disputeSplit: { freelancerPct, clientPct, freelancerShare, clientShare },
-          history: [
-            ...job.history,
-            { step: "Resolved", date: getCurrentDate(), title: resolveTitle, actor: "Mediator" },
-            { step: finalStatus, date: getCurrentDate(), title: `Funds Distributed by Arbitrator`, actor: "Smart Contract Escrow" }
-          ],
-          lastUpdated: new Date().toISOString()
-        };
-      }
-      return job;
-    }));
-
-    if (session.role === "freelancer") {
-      setSession(prev => ({ ...prev, balance: prev.balance + freelancerShare }));
-    } else if (session.role === "client") {
-      setSession(prev => ({ ...prev, balance: prev.balance + clientShare }));
+  const resolveDispute = async (jobId, freelancerPct, clientPct) => {
+    if (!contract) {
+      addToast("Please connect wallet first", "error");
+      return false;
     }
 
-    const txHash = generateTxHash();
-    const newTx = {
-      txHash,
-      jobId,
-      action: "Dispute Resolved",
-      from: "Smart Contract Escrow",
-      to: "Freelancer / Client",
-      amount: freelancerShare,
-      timestamp: new Date().toISOString(),
-      blockNumber: Math.floor(19900000 + Math.random() * 50000),
-      gasUsed: Math.floor(95000 + Math.random() * 15000)
-    };
-    setTransactions(prev => [newTx, ...prev]);
+    try {
+      const job = jobs.find((item) => item.id === jobId);
+      const amount = job?.amount || 0;
+      const freelancerShare = parseFloat(((amount * freelancerPct) / 100).toFixed(4));
+      const clientShare = parseFloat(((amount * clientPct) / 100).toFixed(4));
 
-    addToast(`Dispute resolved! Disbursed ${freelancerShare} ETH to Freelancer & ${clientShare} ETH to Client.`, "success");
-    return true;
+      const tx = await contract.resolveDispute(jobId, freelancerPct, clientPct);
+      const receipt = await tx.wait();
+
+      await syncJob(jobId);
+      addTransactionRecord(tx, receipt, jobId, "Dispute Resolved", "Escrow Contract", "Freelancer / Client", freelancerShare + clientShare);
+
+      if (session.role === "freelancer") {
+        setSession((prev) => ({ ...prev, balance: prev.balance + freelancerShare }));
+      } else if (session.role === "client") {
+        setSession((prev) => ({ ...prev, balance: prev.balance + clientShare }));
+      }
+
+      addToast(`Dispute resolved! Disbursed ${freelancerShare} ETH to Freelancer & ${clientShare} ETH to Client.`, "success");
+      return true;
+    } catch (error) {
+      console.error(error);
+      addToast("Failed to resolve dispute on contract.", "error");
+      return false;
+    }
+  };
+
+  const getJob = async (jobId) => {
+    if (!contract) {
+      addToast("Please connect wallet first", "error");
+      return null;
+    }
+
+    return await fetchJobFromContract(jobId);
   };
 
   return (
@@ -725,6 +846,7 @@ export const EscrowProvider = ({ children }) => {
         rejectWork,
         raiseDispute,
         resolveDispute,
+        getJob,
         addToast,
         removeToast,
         switchNetwork,

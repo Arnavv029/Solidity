@@ -18,7 +18,11 @@ export const FreelancerView = ({ onViewDetails }) => {
   const [disputeReason, setDisputeReason] = useState("");
 
   // Show jobs in the freelancer role simulation
+  const walletAddress = session.address?.toLowerCase();
   const freelancerJobs = session.role === "freelancer" ? jobs : [];
+
+  const isAssignedFreelancer = (job) =>
+    walletAddress && job.freelancer?.toLowerCase() === walletAddress;
 
   // Analytics calculator
   const totalEarnings = freelancerJobs.filter(j => j.status === "Paid").reduce((acc, curr) => {
@@ -152,8 +156,17 @@ export const FreelancerView = ({ onViewDetails }) => {
                       </div>
                       <button
                         onClick={() => acceptJob(job.id)}
-                        disabled={session.role !== "freelancer"}
-                        className="px-3.5 py-1.5 text-2xs font-extrabold rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border border-purple-400/20 text-white flex items-center gap-1.5 shadow-md shadow-purple-500/10 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={
+                          session.role !== "freelancer" || !isAssignedFreelancer(job)
+                        }
+                        title={
+                          !session.address
+                            ? "Connect your wallet to accept this job"
+                            : !isAssignedFreelancer(job)
+                            ? `This job is assigned to ${job.freelancer}`
+                            : "Accept this job"
+                        }
+                        className="px-3.5 py-1.5 text-2xs font-extrabold rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border border-purple-400/20 text-white flex items-center gap-1.5 shadow-lg shadow-purple-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed mix-blend-screen"
                       >
                         <FiPlay />
                         Accept Job

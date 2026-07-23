@@ -1,10 +1,10 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { useEscrow } from "../context/EscrowContext";
-import { FiCreditCard, FiChevronDown, FiCopy, FiCheck, FiLayers, FiMenu, FiX, FiBell } from "react-icons/fi";
+import { FiCreditCard, FiChevronDown, FiLayers, FiMenu, FiX, FiBell } from "react-icons/fi";
 import { motion, AnimatePresence } from "framer-motion";
 
 export const Navbar = ({ currentTab, setCurrentTab }) => {
-  const { session, connectWallet, disconnectWallet, selectRole, clearRole, switchNetwork, NETWORKS, SUPPORTED_CHAIN_IDS } = useEscrow();
+  const { session, connectWallet, disconnectWallet, selectRole, switchNetwork, NETWORKS, addToast } = useEscrow();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -15,6 +15,8 @@ export const Navbar = ({ currentTab, setCurrentTab }) => {
     { id: "mediator", label: "Resolution Panel" },
     { id: "activity", label: "Ledger Ledger" }
   ];
+
+  const networkShortcuts = [11155111, 1, 137, 31337];
 
   const getShortAddress = (address) => {
     if (!address) return "";
@@ -95,13 +97,13 @@ export const Navbar = ({ currentTab, setCurrentTab }) => {
               <AnimatePresence>
                 {dropdownOpen && (
                   <>
-                    <div className="fixed inset-0 z-10" onClick={() => setDropdownOpen(false)} />
-                    
+                    <div className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm" onClick={() => setDropdownOpen(false)} />
                     <motion.div
                       initial={{ opacity: 0, y: 15, scale: 0.95 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                      className="absolute right-0 mt-2.5 w-80 glass-panel border border-white/[0.08] bg-dark-900/95 backdrop-blur-2xl p-4 shadow-2xl z-20 flex flex-col gap-3 rounded-2xl"
+                      onClick={(event) => event.stopPropagation()}
+                      className="absolute right-0 mt-2.5 w-80 border border-white/[0.08] bg-dark-950/95 p-4 shadow-2xl z-50 flex flex-col gap-3 rounded-2xl"
                     >
                       <div className="flex flex-col gap-1 border-b border-white/[0.06] pb-3">
                         <span className="text-xs text-slate-500 uppercase tracking-widest font-bold">Wallet</span>
@@ -126,7 +128,7 @@ export const Navbar = ({ currentTab, setCurrentTab }) => {
                             {session.walletBalance === null ? (
                               <span className="text-sm text-slate-400">Loading...</span>
                             ) : (
-                              `${session.walletBalance.toFixed(4)} ${session.chainName?.includes('Polygon') ? 'MATIC' : 'ETH'}`
+                              `${session.walletBalance.toFixed(4)} ${session.nativeCurrency ?? 'ETH'}`
                             )}
                           </span>
                         </div>
@@ -140,45 +142,31 @@ export const Navbar = ({ currentTab, setCurrentTab }) => {
                       <div className="flex flex-col gap-2">
                         <span className="text-xs text-slate-500 uppercase tracking-widest font-bold">Switch Network</span>
                         <div className="grid grid-cols-2 gap-1.5">
-                          <button
-                            onClick={async () => {
-                              await switchNetwork(11155111); // Sepolia
-                              setDropdownOpen(false);
-                            }}
-                            className={`px-2 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                              session.chainId === 11155111
-                                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
-                                : "bg-white/[0.01] border-white/[0.04] text-slate-400 hover:text-white hover:border-white/10"
-                            }`}
-                          >
-                            Sepolia
-                          </button>
-                          <button
-                            onClick={async () => {
-                              await switchNetwork(137); // Polygon
-                              setDropdownOpen(false);
-                            }}
-                            className={`px-2 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                              session.chainId === 137
-                                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
-                                : "bg-white/[0.01] border-white/[0.04] text-slate-400 hover:text-white hover:border-white/10"
-                            }`}
-                          >
-                            Polygon
-                          </button>
-                          <button
-                            onClick={async () => {
-                              await switchNetwork(31337); // Localhost
-                              setDropdownOpen(false);
-                            }}
-                            className={`px-2 py-1.5 rounded-lg text-xs font-bold border transition-all col-span-2 ${
-                              session.chainId === 31337
-                                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
-                                : "bg-white/[0.01] border-white/[0.04] text-slate-400 hover:text-white hover:border-white/10"
-                            }`}
-                          >
-                            Localhost
-                          </button>
+                          {networkShortcuts.map((chainId) => {
+                            const network = NETWORKS[chainId] || { name: `Chain ${chainId}` };
+                            return (
+                              <button
+                                key={chainId}
+                                onClick={async () => {
+                                  const switched = await switchNetwork(chainId);
+                                  disconnectWallet();
+                                  if (switched) {
+                                    addToast(`Network switched to ${network.name}. Please reconnect.`, "success");
+                                  } else {
+                                    addToast(`Unable to switch to ${network.name}.`, "error");
+                                  }
+                                  setDropdownOpen(false);
+                                }}
+                                className={`px-2 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                                  session.chainId === chainId
+                                    ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
+                                    : "bg-white/[0.01] border-white/[0.04] text-slate-400 hover:text-white hover:border-white/10"
+                                }`}
+                              >
+                                {network.name}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
 
